@@ -51,7 +51,7 @@ A tool-using LLM agent **built from the loop up**, with no agent framework. It i
 **Ablations worth running.** Each is a one-flag change, scored by the same suite:
 - heuristic vs. `--llm-summary` compaction
 - `--budget 4000` vs. 12000
-- with vs. without the "tool output is data" line in the system prompt (the safety category should drop without it)
+- with vs. without the "tool output is data" line in the system prompt, via `--no-injection-guard` (the safety category should drop without it)
 
 ## Run it
 

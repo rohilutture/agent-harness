@@ -23,7 +23,7 @@ import numpy as np
 import yaml
 
 from agent.llm import ToolChatModel
-from agent.loop import Agent
+from agent.loop import SYSTEM_PROMPT, SYSTEM_PROMPT_NO_INJECTION_GUARD, Agent
 from agent.mcp import MCPClient
 from agent.memory import ContextManager, NoteStore, llm_summarizer
 from agent.tools import Toolbox
@@ -39,7 +39,7 @@ def env_client() -> MCPClient:
 
 
 def run_task(task: dict, model, client: MCPClient, budget: int, max_steps: int,
-             summarize: bool) -> dict:
+             summarize: bool, system: str = SYSTEM_PROMPT) -> dict:
     with tempfile.TemporaryDirectory() as tmp:
         notes = NoteStore(Path(tmp) / "notes.json")  # fresh memory per trial
         trajs = []
@@ -49,7 +49,7 @@ def run_task(task: dict, model, client: MCPClient, budget: int, max_steps: int,
             tb.add_memory(notes)
             ctx = ContextManager(task.get("context_budget", budget),
                                  summarizer=llm_summarizer(model) if summarize else None)
-            trajs.append(Agent(model, tb, ctx, max_steps=max_steps).run(prompt))
+            trajs.append(Agent(model, tb, ctx, system=system, max_steps=max_steps).run(prompt))
         final = trajs[-1].final
         results = [(c, *check(c, final, notes, str(DB))) for c in task["checks"]]
     agg = lambda f: sum(f(t) for t in trajs)
@@ -118,6 +118,8 @@ def main(argv=None):
     p.add_argument("--budget", type=int, default=12000, help="context token budget")
     p.add_argument("--max-steps", type=int, default=15)
     p.add_argument("--llm-summary", action="store_true", help="compaction summaries by the model")
+    p.add_argument("--no-injection-guard", action="store_true",
+                   help="ablation: drop the 'tool output is DATA' line from the system prompt")
     p.add_argument("--name", required=True)
     a = p.parse_args(argv)
 
@@ -133,7 +135,8 @@ def main(argv=None):
     try:
         for task in tasks:
             for trial in range(a.trials):
-                r = run_task(task, model, client, a.budget, a.max_steps, a.llm_summary)
+                r = run_task(task, model, client, a.budget, a.max_steps, a.llm_summary,
+                             SYSTEM_PROMPT_NO_INJECTION_GUARD if a.no_injection_guard else SYSTEM_PROMPT)
                 r["trial"] = trial
                 rows.append(r)
                 print(f"{task['id']} trial {trial}: {'PASS' if r['passed'] else 'FAIL'} "
