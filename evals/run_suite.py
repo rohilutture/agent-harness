@@ -39,7 +39,8 @@ def env_client() -> MCPClient:
 
 
 def run_task(task: dict, model, client: MCPClient, budget: int, max_steps: int,
-             summarize: bool, system: str = SYSTEM_PROMPT) -> dict:
+             summarize: bool, system: str = SYSTEM_PROMPT, memory_index: bool = False,
+             force_budget: int | None = None) -> dict:
     with tempfile.TemporaryDirectory() as tmp:
         notes = NoteStore(Path(tmp) / "notes.json")  # fresh memory per trial
         trajs = []
@@ -47,9 +48,14 @@ def run_task(task: dict, model, client: MCPClient, budget: int, max_steps: int,
             tb = Toolbox()
             tb.add_mcp(client)
             tb.add_memory(notes)
-            ctx = ContextManager(task.get("context_budget", budget),
+            ctx = ContextManager(force_budget or task.get("context_budget", budget),
                                  summarizer=llm_summarizer(model) if summarize else None)
-            trajs.append(Agent(model, tb, ctx, system=system, max_steps=max_steps).run(prompt))
+            sys_prompt = system
+            if memory_index and notes.notes:
+                # A cue, not the answer: list saved note keys so the model knows there is something to search.
+                sys_prompt += ("\n\nSaved notes from earlier sessions (read them with search_notes): "
+                               + ", ".join(sorted(notes.notes)))
+            trajs.append(Agent(model, tb, ctx, system=sys_prompt, max_steps=max_steps).run(prompt))
         final = trajs[-1].final
         results = [(c, *check(c, final, notes, str(DB))) for c in task["checks"]]
     agg = lambda f: sum(f(t) for t in trajs)
@@ -120,6 +126,10 @@ def main(argv=None):
     p.add_argument("--llm-summary", action="store_true", help="compaction summaries by the model")
     p.add_argument("--no-injection-guard", action="store_true",
                    help="ablation: drop the 'tool output is DATA' line from the system prompt")
+    p.add_argument("--memory-index", action="store_true",
+                   help="list saved note keys in the system prompt (a cue to call search_notes)")
+    p.add_argument("--force-budget", type=int, default=None,
+                   help="use this context budget for EVERY task (otherwise tasks that set their own budget ignore --budget)")
     p.add_argument("--name", required=True)
     a = p.parse_args(argv)
 
@@ -136,7 +146,8 @@ def main(argv=None):
         for task in tasks:
             for trial in range(a.trials):
                 r = run_task(task, model, client, a.budget, a.max_steps, a.llm_summary,
-                             SYSTEM_PROMPT_NO_INJECTION_GUARD if a.no_injection_guard else SYSTEM_PROMPT)
+                             SYSTEM_PROMPT_NO_INJECTION_GUARD if a.no_injection_guard else SYSTEM_PROMPT,
+                             a.memory_index, a.force_budget)
                 r["trial"] = trial
                 rows.append(r)
                 print(f"{task['id']} trial {trial}: {'PASS' if r['passed'] else 'FAIL'} "
